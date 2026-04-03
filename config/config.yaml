@@ -1,0 +1,76 @@
+# =============================================================================
+#  harmonic_kg_project — centralised configuration
+# =============================================================================
+#
+#  All paths are relative to the KG_DL_PROJECT root unless they start with /.
+#  Edit this file once; all modules read it via config.load().
+# =============================================================================
+
+# ── Data sources ────────────────────────────────────────────────────────────
+data:
+  midi_root:         "tegridy-tools/tegridy-tools/lmd_matched"
+  h5_root:           "tegridy-tools/tegridy-tools/lmd_matched_h5"
+  match_scores_path: "match_scores.json"
+
+# ── Dataset curation ────────────────────────────────────────────────────────
+dataset:
+  min_match_score:   0.70        # DTW quality filter threshold
+  pick_midi:         "best"      # "best" | "first" | "all"
+  max_tracks:        null        # null = use all; set an int for prototyping
+  output_dir:        "harmonic_kg_project/01_dataset/output"
+  parquet_file:      "harmonic_kg_project/01_dataset/output/curated_dataset.parquet"
+  csv_file:          "harmonic_kg_project/01_dataset/output/curated_dataset.csv"
+
+# ── Harmonic analyzer ───────────────────────────────────────────────────────
+analyzer:
+  key_window:        6
+  key_confidence:    0.80
+
+# ── Knowledge graph ──────────────────────────────────────────────────────────
+knowledge_graph:
+  output_dir:        "harmonic_kg_project/02_knowledge_graph/output"
+  turtle_file:       "harmonic_kg_project/02_knowledge_graph/output/harmonic_kg.ttl"
+  ntriples_file:     "harmonic_kg_project/02_knowledge_graph/output/harmonic_kg.nt"
+  graphml_file:      "harmonic_kg_project/02_knowledge_graph/output/harmonic_kg.graphml"
+  include_progressions: false    # true = adds chord-level nodes (large graph)
+
+# ── Deep learning ────────────────────────────────────────────────────────────
+deep_learning:
+  label_col:         "primary_genre"
+  model:             "mlp"               # "mlp" | "transformer"
+  checkpoint_dir:    "harmonic_kg_project/03_deep_learning/checkpoints"
+
+  # MLP (GenreClassifier)
+  mlp:
+    hidden_dims:     [256, 128, 64]
+    dropout:         0.3
+
+  # Transformer (ChordTransformer)
+  transformer:
+    d_model:         128
+    nhead:           4
+    num_layers:      3
+    dim_feedforward: 256
+    max_seq_len:     128
+    dropout:         0.1
+
+  # Training
+  training:
+    epochs:          30
+    lr:              3.0e-4
+    weight_decay:    1.0e-4
+    batch_size:      64
+    val_frac:        0.15
+    test_frac:       0.15
+    clip_grad_norm:  1.0
+    save_every:      5
+    device:          "auto"              # "auto" | "cuda" | "cpu"
+    seed:            42
+
+# ── Generation ───────────────────────────────────────────────────────────────
+generation:
+  output_dir:        "harmonic_kg_project/04_generation/output"
+  default_tempo:     120
+  default_key:       "C major"
+  duration_per_chord: 1.0
+  time_signature:    "4/4"
