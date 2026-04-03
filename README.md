@@ -1,15 +1,15 @@
-# S.O.N.A.T.A.
-**Symbolic Ontology & Neural Audio Transcription Architecture**
+# S.O.N.A.T.A.M.
+**Symbolic Ontology & Neural Audio Transcription Architecture for Music**
 
 ### 📖 About
-S.O.N.A.T.A. is a neuro-symbolic AI framework for music. It provides a full end-to-end pipeline from MIDI and audio metadata to a structured Music Knowledge Graph and downstream Deep Learning models. 
+S.O.N.A.T.A.M. is a neuro-symbolic AI framework for music. It provides a full end-to-end pipeline from MIDI and audio metadata to a structured Music Knowledge Graph and downstream Deep Learning models. 
 
 ---
 
 ### 🧠 Project Overview
-Automatic Music Transcription (AMT) models often struggle with polyphonic audio, hallucinating notes that make acoustic sense but violate fundamental music theory. S.O.N.A.T.A. solves this by bridging the gap between acoustic perception and the "Platonic rules" of music.
+Automatic Music Transcription (AMT) models often struggle with polyphonic audio, hallucinating notes that make acoustic sense but violate fundamental music theory. S.O.N.A.T.A.M. solves this by bridging the gap between acoustic perception and the "Platonic rules" of music.
 
-By mining massive symbolic datasets (like the Lakh MIDI Dataset), S.O.N.A.T.A. automatically extracts the statistical and theoretical rules of voice-leading, harmony, and key modulation. It then formalizes these rules into a highly structured Knowledge Graph. When paired with downstream Deep Learning models (like MT3), this graph acts as a mathematical prior—forcing the acoustic neural network to weigh what it *hears* against what is theoretically *probable* within a specific musical genre.
+By mining massive symbolic datasets (like the Lakh MIDI Dataset), S.O.N.A.T.A.M. automatically extracts the statistical and theoretical rules of voice-leading, harmony, and key modulation. It then formalizes these rules into a highly structured Knowledge Graph. When paired with downstream Deep Learning models (like MT3), this graph acts as a mathematical prior—forcing the acoustic neural network to weigh what it *hears* against what is theoretically *probable* within a specific musical genre.
 
 ### ⚙️ Core Pipeline Features
 * **Automated Rule Mining:** Parses raw, multi-track MIDI files using dynamic harmonic pooling and rolling windows to extract clean, root-position chord progressions.
@@ -59,7 +59,7 @@ Lakh MIDI Dataset (lmd_matched/)
 ## 📁 Project Structure
 
 ```text
-SONATA/
+SONATAM/
 ├── README.md
 ├── requirements.txt
 │
