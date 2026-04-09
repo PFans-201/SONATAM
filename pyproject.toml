@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sonata"
+version = "0.1.0"
+description = "Symbolic Ontology & Neural Audio Transcription Architecture"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "music21",
+    "torch",
+    "pandas",
+    "pyarrow",
+    "rdflib",
+    "networkx",
+    "pyyaml",
+    "h5py",
+    "numpy",
+    "scikit-learn",
+    "matplotlib",
+    "seaborn",
+    "tqdm",
+    "requests",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-cov",
+    "ruff",
+    "black",
+]
+
+[project.scripts]
+sonata-build-dataset = "sonata.data.linker:main"
+sonata-build-kg      = "sonata.kg.builder:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"

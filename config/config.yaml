@@ -1,25 +1,39 @@
 # =============================================================================
-#  harmonic_kg_project — centralised configuration
+#  SONATAM — centralised configuration
 # =============================================================================
 #
-#  All paths are relative to the KG_DL_PROJECT root unless they start with /.
-#  Edit this file once; all modules read it via config.load().
+#  All paths are relative to the SONATAM project root unless they start with /.
+#  Edit this file once; all modules read it via sonata.config.settings.load().
 # =============================================================================
 
 # ── Data sources ────────────────────────────────────────────────────────────
 data:
-  midi_root:         "tegridy-tools/tegridy-tools/lmd_matched"
-  h5_root:           "tegridy-tools/tegridy-tools/lmd_matched_h5"
-  match_scores_path: "match_scores.json"
+  # Raw download destination (managed by scripts/download_lmd.py)
+  raw_dir:           "data/raw"
+
+  # Unpacked locations (set automatically by the download script)
+  midi_root:         "data/raw/lmd_matched"        # lmd_matched.tar.gz
+  aligned_root:      "data/raw/lmd_aligned"        # lmd_aligned.tar.gz
+  h5_root:           "data/raw/lmd_matched_h5"     # lmd_matched_h5.tar.gz
+  match_scores_path: "data/raw/match_scores.json"  # matched match_scores
+  aligned_scores_path: "data/raw/match_scores_aligned.json"  # aligned match_scores
+
+  # Download URLs  (Colin Raffel / Lakh MIDI Dataset)
+  urls:
+    lmd_matched:       "http://hog.ee.columbia.edu/craffel/lmd/lmd_matched.tar.gz"
+    lmd_aligned:       "http://hog.ee.columbia.edu/craffel/lmd/lmd_aligned.tar.gz"
+    lmd_matched_h5:    "http://hog.ee.columbia.edu/craffel/lmd/lmd_matched_h5.tar.gz"
+    match_scores:      "http://hog.ee.columbia.edu/craffel/lmd/match_scores.json"
+    match_scores_aligned: "https://colinraffel.com/projects/lmd/match_scores.json"
 
 # ── Dataset curation ────────────────────────────────────────────────────────
 dataset:
   min_match_score:   0.70        # DTW quality filter threshold
   pick_midi:         "best"      # "best" | "first" | "all"
   max_tracks:        null        # null = use all; set an int for prototyping
-  output_dir:        "harmonic_kg_project/01_dataset/output"
-  parquet_file:      "harmonic_kg_project/01_dataset/output/curated_dataset.parquet"
-  csv_file:          "harmonic_kg_project/01_dataset/output/curated_dataset.csv"
+  output_dir:        "data/processed"
+  parquet_file:      "data/processed/curated_dataset.parquet"
+  csv_file:          "data/processed/curated_dataset.csv"
 
 # ── Harmonic analyzer ───────────────────────────────────────────────────────
 analyzer:
@@ -28,17 +42,17 @@ analyzer:
 
 # ── Knowledge graph ──────────────────────────────────────────────────────────
 knowledge_graph:
-  output_dir:        "harmonic_kg_project/02_knowledge_graph/output"
-  turtle_file:       "harmonic_kg_project/02_knowledge_graph/output/harmonic_kg.ttl"
-  ntriples_file:     "harmonic_kg_project/02_knowledge_graph/output/harmonic_kg.nt"
-  graphml_file:      "harmonic_kg_project/02_knowledge_graph/output/harmonic_kg.graphml"
+  output_dir:        "data/processed"
+  turtle_file:       "data/processed/harmonic_kg.ttl"
+  ntriples_file:     "data/processed/harmonic_kg.nt"
+  graphml_file:      "data/processed/harmonic_kg.graphml"
   include_progressions: false    # true = adds chord-level nodes (large graph)
 
 # ── Deep learning ────────────────────────────────────────────────────────────
 deep_learning:
   label_col:         "primary_genre"
   model:             "mlp"               # "mlp" | "transformer"
-  checkpoint_dir:    "harmonic_kg_project/03_deep_learning/checkpoints"
+  checkpoint_dir:    "checkpoints"
 
   # MLP (GenreClassifier)
   mlp:
@@ -69,7 +83,7 @@ deep_learning:
 
 # ── Generation ───────────────────────────────────────────────────────────────
 generation:
-  output_dir:        "harmonic_kg_project/04_generation/output"
+  output_dir:        "data/generated"
   default_tempo:     120
   default_key:       "C major"
   duration_per_chord: 1.0
