@@ -1,19 +1,33 @@
-"""sonata.models — deep learning architectures, dataset, training, and evaluation."""
+"""sonata.models — GraphSAGE link prediction & hybrid recommendation."""
 
-from sonata.models.architectures.classifier import GenreClassifier
-from sonata.models.architectures.transformer import ChordTransformer
-from sonata.models.dataset import HarmonicDataset, build_vocab
-from sonata.models.train import Trainer, TrainerConfig
-from sonata.models.evaluate import classification_report_df, confusion_matrix_plot, tsne_plot
+from sonata.models.graph_models import (
+    GraphSAGELinkPredModel,
+    HeteroGraphSAGE,
+    LinkPredictor,
+)
+from sonata.models.train import LinkPredTrainer, TrainerConfig
+from sonata.models.evaluate import (
+    evaluate_link_prediction,
+    compute_mrr,
+    compute_hits_at_k,
+    plot_training_curves,
+    plot_embedding_tsne,
+    plot_score_distribution,
+)
 
 __all__ = [
-    "GenreClassifier",
-    "ChordTransformer",
-    "HarmonicDataset",
-    "build_vocab",
-    "Trainer",
+    # Models
+    "GraphSAGELinkPredModel",
+    "HeteroGraphSAGE",
+    "LinkPredictor",
+    # Training
+    "LinkPredTrainer",
     "TrainerConfig",
-    "classification_report_df",
-    "confusion_matrix_plot",
-    "tsne_plot",
+    # Evaluation
+    "evaluate_link_prediction",
+    "compute_mrr",
+    "compute_hits_at_k",
+    "plot_training_curves",
+    "plot_embedding_tsne",
+    "plot_score_distribution",
 ]

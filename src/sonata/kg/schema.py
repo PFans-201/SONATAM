@@ -1,163 +1,167 @@
 """
 schema.py
 =========
-Knowledge-graph schema constants for the SONATA project.
+RDF ontology definition for the SONATAM harmonic knowledge graph.
 
-Defines
--------
-* RDF namespace objects (``rdflib.Namespace``)
-* Node-type URIs — Song, Artist, Genre, Chord, Key, ChordProgression
-* Edge-type URIs — hasArtist, hasGenre, hasKey, hasChord, transitionsTo, …
-* ``HarmonicKGSchema`` — static container class for all namespaces & URIs
+Defines node types, edge types, and data properties for the hybrid
+recommendation / link-prediction knowledge graph.
+
+Node types
+----------
+MusicalPiece, Artist, Genre, MusicalKey, ChordProgression, Chord, Era, User, Interaction
+
+Edge types
+----------
+hasArtist, hasGenre, hasGlobalKey, hasProgression, hasChord, hasEra,
+transitionsTo, listenedTo, rated
+
+Main class
+----------
+HarmonicKGSchema
+    Provides namespace URIs, node/edge type enums, and URI factory methods.
 """
 
 from __future__ import annotations
 
-from rdflib import Graph, Literal, Namespace, URIRef
-from rdflib.namespace import OWL, RDF, RDFS, XSD
+from typing import Tuple
 
-__all__ = ["HarmonicKGSchema", "NS"]
+try:
+    from rdflib import Namespace, URIRef, Literal, RDF, RDFS, XSD
+    _RDF_AVAILABLE = True
+except ImportError:
+    _RDF_AVAILABLE = False
 
+__all__ = ["HarmonicKGSchema"]
 
-# ── Project-level RDF namespace ────────────────────────────────────────
-NS = Namespace("http://harmonic-kg.org/")
+# -- Namespace ---------------------------------------------------------------
+HKG = Namespace("http://harmonic-kg.org/") if _RDF_AVAILABLE else None
 
 
 class HarmonicKGSchema:
     """
-    Static container for all RDF namespaces and URI factory methods used
-    by the SONATA project.
+    Ontology / schema for the SONATAM knowledge graph.
 
-    Usage
-    -----
-    >>> from sonata.kg.schema import HarmonicKGSchema as S
-    >>> g = rdflib.Graph()
-    >>> g.bind("hkg", S.NS)
-    >>> song_uri = S.song_uri("TRAAAGR128F425B14B")
+    Provides:
+
+    * **Node type** constants and their RDF classes.
+    * **Edge type** constants and their RDF properties.
+    * **URI factory** methods for minting unique resource identifiers.
+    * **Data properties** list for each node type.
+
+    All URIs live under ``http://harmonic-kg.org/``.
     """
 
-    # Namespaces
-    NS     = NS
-    OWL    = OWL
-    RDF    = RDF
-    RDFS   = RDFS
-    XSD    = XSD
+    NAMESPACE = "http://harmonic-kg.org/"
 
-    # ── Class URIs ─────────────────────────────────────────────────────
-    Song              = NS["Song"]
-    Artist            = NS["Artist"]
-    Genre             = NS["Genre"]
-    MusicalKey        = NS["MusicalKey"]
-    Chord             = NS["Chord"]
-    ChordProgression  = NS["ChordProgression"]
-    ChordTransition   = NS["ChordTransition"]
+    # -- Node types -----------------------------------------------------------
+    NODE_TYPES = [
+        "MusicalPiece",
+        "Artist",
+        "Genre",
+        "MusicalKey",
+        "ChordProgression",
+        "Chord",
+        "Era",
+        "User",
+        "Interaction",
+    ]
 
-    # ── Property URIs ──────────────────────────────────────────────────
-    # Song-level
-    hasTrackId        = NS["hasTrackId"]
-    hasTitle          = NS["hasTitle"]
-    hasArtist         = NS["hasArtist"]
-    hasArtistName     = NS["hasArtistName"]
-    hasYear           = NS["hasYear"]
-    hasTempo          = NS["hasTempo"]
-    hasDuration       = NS["hasDuration"]
-    hasLoudness       = NS["hasLoudness"]
-    hasDanceability   = NS["hasDanceability"]
-    hasEnergy         = NS["hasEnergy"]
-    hasTimeSignature  = NS["hasTimeSignature"]
-    hasMatchScore     = NS["hasMatchScore"]
+    # -- Edge types (predicate, src_type, dst_type) ---------------------------
+    EDGE_TYPES = [
+        ("hasArtist",      "MusicalPiece", "Artist"),
+        ("hasGenre",       "MusicalPiece", "Genre"),
+        ("hasGlobalKey",   "MusicalPiece", "MusicalKey"),
+        ("hasProgression", "MusicalPiece", "ChordProgression"),
+        ("hasChord",       "ChordProgression", "Chord"),
+        ("hasEra",         "MusicalPiece", "Era"),
+        ("transitionsTo",  "Chord", "Chord"),
+        ("listenedTo",     "User", "MusicalPiece"),
+        ("rated",          "User", "MusicalPiece"),
+    ]
 
-    # Genre / tags
-    hasGenre          = NS["hasGenre"]
-    hasPrimaryGenre   = NS["hasPrimaryGenre"]
-    genreLabel        = NS["genreLabel"]
+    # -- Data properties per node type ----------------------------------------
+    DATA_PROPERTIES = {
+        "MusicalPiece": [
+            "title", "release", "year", "duration", "tempo",
+            "time_signature", "loudness", "danceability", "energy",
+        ],
+        "Artist":           ["artist_name"],
+        "Genre":            ["genre_name"],
+        "MusicalKey":       ["key_name", "mode"],
+        "ChordProgression": ["progression_string"],
+        "Chord":            ["chord_label", "roman_numeral"],
+        "Era":              ["era_label", "decade_start"],
+        "User":             ["user_id"],
+        "Interaction":      ["play_count", "rating", "timestamp"],
+    }
 
-    # Key / harmony
-    hasGlobalKey      = NS["hasGlobalKey"]
-    keyName           = NS["keyName"]
-    keyMode           = NS["keyMode"]
-    msdKeyName        = NS["msdKeyName"]
-    msdKeyConfidence  = NS["msdKeyConfidence"]
-
-    # Chord & progression
-    hasProgression    = NS["hasProgression"]
-    hasChord          = NS["hasChord"]
-    chordHarte        = NS["chordHarte"]
-    chordRoman        = NS["chordRoman"]
-    chordFunction     = NS["chordFunction"]
-    chordPosition     = NS["chordPosition"]
-    chordDuration     = NS["chordDuration"]
-
-    # Transition
-    transitionsTo     = NS["transitionsTo"]
-    transitionProb    = NS["transitionProb"]
-    fromChord         = NS["fromChord"]
-    toChord           = NS["toChord"]
-
-    # Harmonic features (numeric)
-    numModulations         = NS["numModulations"]
-    chordVocabRoman        = NS["chordVocabRoman"]
-    uniqueChordRatio       = NS["uniqueChordRatio"]
-    transitionEntropy      = NS["transitionEntropy"]
-    harmRhythmMean         = NS["harmRhythmMean"]
-    avgChordCardinality    = NS["avgChordCardinality"]
-    intervalClassVector    = NS["intervalClassVector"]
-    funcRatioT             = NS["funcRatioT"]
-    funcRatioD             = NS["funcRatioD"]
-    funcRatioS             = NS["funcRatioS"]
-    funcRatioPD            = NS["funcRatioPD"]
-
-    # ── URI factory methods ────────────────────────────────────────────
+    # ------------------------------------------------------------------
+    #  URI factory methods
+    # ------------------------------------------------------------------
 
     @staticmethod
-    def song_uri(track_id: str) -> URIRef:
-        """URIRef for a Song node, e.g. ``hkg:song/TRAAAGR128F425B14B``."""
-        return NS[f"song/{track_id}"]
+    def song_uri(track_id: str) -> str:
+        """Mint a URI for a MusicalPiece node."""
+        return f"{HarmonicKGSchema.NAMESPACE}piece/{track_id}"
 
     @staticmethod
-    def artist_uri(artist_id: str) -> URIRef:
-        """URIRef for an Artist node."""
-        return NS[f"artist/{artist_id}"]
+    def artist_uri(artist_id: str) -> str:
+        """Mint a URI for an Artist node."""
+        safe = artist_id.replace(" ", "_")
+        return f"{HarmonicKGSchema.NAMESPACE}artist/{safe}"
 
     @staticmethod
-    def genre_uri(genre_label: str) -> URIRef:
-        """URIRef for a Genre node (label is slugified)."""
-        slug = genre_label.replace(" ", "_").replace("/", "-").lower()
-        return NS[f"genre/{slug}"]
+    def genre_uri(genre: str) -> str:
+        """Mint a URI for a Genre node."""
+        safe = genre.lower().replace(" ", "_").replace("/", "_")
+        return f"{HarmonicKGSchema.NAMESPACE}genre/{safe}"
 
     @staticmethod
-    def key_uri(key_name: str) -> URIRef:
-        """URIRef for a MusicalKey node, e.g. ``hkg:key/C_major``."""
-        slug = key_name.replace(" ", "_").replace("#", "sharp").replace("-", "flat")
-        return NS[f"key/{slug}"]
+    def key_uri(key_name: str, mode: str = "") -> str:
+        """Mint a URI for a MusicalKey node."""
+        label = f"{key_name}_{mode}" if mode else key_name
+        return f"{HarmonicKGSchema.NAMESPACE}key/{label}"
 
     @staticmethod
-    def chord_uri(harte_label: str) -> URIRef:
-        """URIRef for a Chord node, e.g. ``hkg:chord/C:maj``."""
-        slug = harte_label.replace(":", "_").replace("#", "sharp").replace("/", "-")
-        return NS[f"chord/{slug}"]
+    def chord_uri(chord_label: str) -> str:
+        """Mint a URI for a Chord node."""
+        safe = chord_label.replace("#", "sharp").replace(" ", "_")
+        return f"{HarmonicKGSchema.NAMESPACE}chord/{safe}"
 
     @staticmethod
-    def progression_uri(track_id: str, midi_file: str) -> URIRef:
-        """URIRef for a ChordProgression node tied to a specific MIDI file."""
-        return NS[f"progression/{track_id}/{midi_file.replace('.', '_')}"]
+    def progression_uri(track_id: str, index: int = 0) -> str:
+        """Mint a URI for a ChordProgression node."""
+        return f"{HarmonicKGSchema.NAMESPACE}progression/{track_id}_{index}"
 
     @staticmethod
-    def transition_uri(from_harte: str, to_harte: str) -> URIRef:
-        """URIRef for a ChordTransition node between two Harte-labelled chords."""
-        a = from_harte.replace(":", "_").replace("#", "sharp")
-        b = to_harte.replace(":", "_").replace("#", "sharp")
-        return NS[f"transition/{a}__{b}"]
+    def era_uri(era_label: str) -> str:
+        """Mint a URI for an Era node."""
+        return f"{HarmonicKGSchema.NAMESPACE}era/{era_label}"
 
-    # ── Graph initialiser ──────────────────────────────────────────────
+    @staticmethod
+    def user_uri(user_id: str) -> str:
+        """Mint a URI for a User node."""
+        return f"{HarmonicKGSchema.NAMESPACE}user/{user_id}"
 
-    @classmethod
-    def new_graph(cls) -> Graph:
-        """Return a new rdflib Graph with all project namespaces pre-bound."""
-        g = Graph()
-        g.bind("hkg",  cls.NS)
-        g.bind("owl",  OWL)
-        g.bind("rdf",  RDF)
-        g.bind("rdfs", RDFS)
-        g.bind("xsd",  XSD)
-        return g
+    @staticmethod
+    def interaction_uri(user_id: str, track_id: str) -> str:
+        """Mint a URI for a User-Piece interaction."""
+        return f"{HarmonicKGSchema.NAMESPACE}interaction/{user_id}_{track_id}"
+
+    # ------------------------------------------------------------------
+    #  RDF helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def rdf_class(node_type: str):
+        """Return the rdflib URIRef for a node-type class."""
+        if not _RDF_AVAILABLE:
+            raise ImportError("rdflib is required: pip install rdflib")
+        return HKG[node_type]
+
+    @staticmethod
+    def rdf_property(edge_type: str):
+        """Return the rdflib URIRef for an edge-type property."""
+        if not _RDF_AVAILABLE:
+            raise ImportError("rdflib is required: pip install rdflib")
+        return HKG[edge_type]

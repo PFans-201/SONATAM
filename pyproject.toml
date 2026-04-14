@@ -4,21 +4,39 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sonata"
-version = "0.1.0"
-description = "Symbolic Ontology & Neural Audio Transcription Architecture"
+version = "0.2.0"
+description = "Symbolic Ontology & Neural Audio Transcription Architecture — GraphSAGE hybrid recommendation and link prediction on musical knowledge graphs"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = [
-    "music21",
-    "torch",
+    # ── Core scientific stack ────────────────────────────────────────
+    "numpy",
     "pandas",
     "pyarrow",
-    "rdflib",
-    "networkx",
+    "scikit-learn",
+
+    # ── Music analysis ──────────────────────────────────────────────
+    "music21",               # symbolic music parsing (MIDI/MusicXML)
+    "musif>=1.2",            # semantic harmonic feature extraction
+    "jams",                  # JAMS annotation format (ChoCo compat)
+
+    # ── Knowledge graph ─────────────────────────────────────────────
+    "rdflib",                # RDF triple store
+    "networkx",              # graph analytics & conversion utilities
+
+    # ── Deep learning — GNN ─────────────────────────────────────────
+    "torch>=2.0",
+    "torch_geometric>=2.5",  # GraphSAGE, HeteroData, link prediction
+    "torchmetrics",          # MRR, Hits@K, AUROC
+
+    # ── Audio transcription (inference only) ────────────────────────
+    # MT3 is installed from git at inference time; see docs
+    "librosa",               # audio loading / spectrogram
+    "soundfile",             # WAV/FLAC I/O
+
+    # ── Utilities ───────────────────────────────────────────────────
     "pyyaml",
     "h5py",
-    "numpy",
-    "scikit-learn",
     "matplotlib",
     "seaborn",
     "tqdm",
@@ -32,10 +50,16 @@ dev = [
     "ruff",
     "black",
 ]
+mt3 = [
+    # Google MT3 — install via: pip install -e ".[mt3]"
+    # Requires separate installation of t5x / jax; see README
+]
 
 [project.scripts]
-sonata-build-dataset = "sonata.data.linker:main"
-sonata-build-kg      = "sonata.kg.builder:main"
+sonata-extract-features = "sonata.data.linker:main"
+sonata-build-kg         = "sonata.kg.builder:main"
+sonata-train            = "sonata.models.train:main"
+sonata-infer            = "sonata.inference.feature_extractor:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -45,4 +69,4 @@ testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py39"
+target-version = "py310"

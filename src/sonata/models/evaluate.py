@@ -1,178 +1,319 @@
 """
 evaluate.py
 ===========
-Evaluation utilities for trained classifiers.
+Evaluation utilities for GraphSAGE link prediction on the SONATAM
+knowledge graph.
 
-Functions
----------
-classification_report_df(model, loader, idx2label, device)
-    Run inference and return a detailed per-class DataFrame.
+Provides:
 
-confusion_matrix_plot(model, loader, idx2label, device)
-    Plot a seaborn confusion-matrix heatmap.
-
-tsne_plot(model, loader, idx2label, device, layer_name)
-    Extract penultimate embeddings and plot a 2-D t-SNE scatter.
+* ``evaluate_link_prediction()`` -- full evaluation on a test split
+* ``compute_mrr()``             -- Mean Reciprocal Rank
+* ``compute_hits_at_k()``       -- Hits@K
+* ``plot_training_curves()``    -- loss / AUC over epochs
+* ``plot_embedding_tsne()``     -- t-SNE of node embeddings
+* ``plot_score_distribution()`` -- histogram of predicted edge scores
 """
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional
+import logging
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
-import torch.nn as nn
-from torch.utils.data import DataLoader
 
-__all__ = ["classification_report_df", "confusion_matrix_plot", "tsne_plot"]
+__all__ = [
+    "evaluate_link_prediction",
+    "compute_mrr",
+    "compute_hits_at_k",
+    "plot_training_curves",
+    "plot_embedding_tsne",
+    "plot_score_distribution",
+]
 
-
-def _run_inference(
-    model: nn.Module,
-    loader: DataLoader,
-    device: str,
-) -> tuple:
-    """Return (y_true, y_pred) numpy arrays."""
-    model.eval()
-    all_true, all_pred = [], []
-    with torch.no_grad():
-        for x, y in loader:
-            x = x.to(device)
-            logits = model(x)
-            preds  = logits.argmax(dim=1).cpu().numpy()
-            all_true.extend(y.numpy())
-            all_pred.extend(preds)
-    return np.array(all_true), np.array(all_pred)
+log = logging.getLogger(__name__)
 
 
-def classification_report_df(
-    model: nn.Module,
-    loader: DataLoader,
-    idx2label: Dict[int, str],
-    device: str = "cpu",
-) -> "pd.DataFrame":  # type: ignore[name-defined]
+# --------------------------------------------------------------------------
+#  Core evaluation
+# --------------------------------------------------------------------------
+
+@torch.no_grad()
+def evaluate_link_prediction(
+    model,
+    data,
+    edge_type: Tuple[str, str, str] = ("MusicalPiece", "hasGenre", "Genre"),
+    ks: Optional[List[int]] = None,
+) -> Dict[str, float]:
     """
-    Run inference and return a per-class metrics DataFrame.
+    Evaluate a trained link prediction model on a data split.
+
+    Parameters
+    ----------
+    model : GraphSAGELinkPredModel
+        A trained model.
+    data : HeteroData
+        A data split (e.g. the test split from ``create_link_split``).
+    edge_type : tuple
+        The target edge type with ``edge_label`` and ``edge_label_index``.
+    ks : list[int], optional
+        Values of K for Hits@K (default ``[1, 3, 5, 10]``).
 
     Returns
     -------
-    pd.DataFrame with columns: class, precision, recall, f1, support.
+    dict
+        Metrics: ``auc_roc``, ``avg_precision``, ``mrr``, ``hits@k``, ...
     """
-    import pandas as pd
-    from sklearn.metrics import classification_report
-
-    y_true, y_pred = _run_inference(model, loader, device)
-    target_names   = [idx2label[i] for i in sorted(idx2label)]
-    report = classification_report(y_true, y_pred, target_names=target_names, output_dict=True)
-    return pd.DataFrame(report).T
-
-
-def confusion_matrix_plot(
-    model: nn.Module,
-    loader: DataLoader,
-    idx2label: Dict[int, str],
-    device: str = "cpu",
-    figsize: tuple = (12, 10),
-    save_path: Optional[str] = None,
-) -> None:
-    """Plot a normalised confusion-matrix heatmap (seaborn)."""
-    import matplotlib.pyplot as plt
-    import seaborn as sns
-    from sklearn.metrics import confusion_matrix
-
-    y_true, y_pred = _run_inference(model, loader, device)
-    labels = [idx2label[i] for i in sorted(idx2label)]
-    cm     = confusion_matrix(y_true, y_pred, normalize="true")
-
-    fig, ax = plt.subplots(figsize=figsize)
-    sns.heatmap(
-        cm, annot=True, fmt=".2f",
-        xticklabels=labels, yticklabels=labels,
-        cmap="Blues", ax=ax,
-    )
-    ax.set_xlabel("Predicted")
-    ax.set_ylabel("True")
-    ax.set_title("Normalised Confusion Matrix")
-    plt.tight_layout()
-    if save_path:
-        plt.savefig(save_path, dpi=150)
-    plt.show()
-
-
-def tsne_plot(
-    model: nn.Module,
-    loader: DataLoader,
-    idx2label: Dict[int, str],
-    device: str = "cpu",
-    figsize: tuple = (10, 8),
-    save_path: Optional[str] = None,
-    perplexity: int = 30,
-) -> None:
-    """
-    Extract the penultimate layer's embeddings, reduce to 2-D with t-SNE,
-    and plot a colour-coded scatter plot.
-
-    Works for GenreClassifier (accesses ``model.net[:-1]``) and
-    ChordTransformer (uses the Transformer output before the head).
-    """
-    import matplotlib.pyplot as plt
-    from sklearn.manifold import TSNE
+    if ks is None:
+        ks = [1, 3, 5, 10]
 
     model.eval()
-    embeddings_list: List[np.ndarray] = []
-    labels_list:     List[int] = []
+    et = edge_type
 
-    # Register a hook on the last hidden layer
-    hook_out: List[torch.Tensor] = []
+    # Forward pass
+    pred = model(
+        data.x_dict,
+        data.edge_index_dict,
+        data[et].edge_label_index,
+        src_type=et[0],
+        dst_type=et[2],
+    )
+    probs = torch.sigmoid(pred).cpu().numpy()
+    labels = data[et].edge_label.cpu().numpy()
 
-    def _hook(module, inp, out):
-        hook_out.append(out.detach().cpu())
+    metrics: Dict[str, float] = {}
 
-    # Determine hook target
+    # -- AUC-ROC + Average Precision --
     try:
-        # GenreClassifier exposes model.net
-        handle = model.net[-2].register_forward_hook(_hook)   # type: ignore[attr-defined]
-    except AttributeError:
-        # ChordTransformer — hook on transformer output
-        handle = model.transformer.register_forward_hook(_hook)  # type: ignore[attr-defined]
+        from sklearn.metrics import roc_auc_score, average_precision_score
+        metrics["auc_roc"] = float(roc_auc_score(labels, probs))
+        metrics["avg_precision"] = float(average_precision_score(labels, probs))
+    except Exception as exc:
+        log.warning("sklearn metrics failed: %s", exc)
+        metrics["auc_roc"] = 0.0
+        metrics["avg_precision"] = 0.0
 
-    with torch.no_grad():
-        for x, y in loader:
-            hook_out.clear()
-            model(x.to(device))
-            if hook_out:
-                emb = hook_out[0]
-                if emb.dim() == 3:          # (B, L, d_model) — mean-pool
-                    emb = emb.mean(dim=1)
-                embeddings_list.append(emb.numpy())
-                labels_list.extend(y.numpy())
+    # -- MRR --
+    metrics["mrr"] = compute_mrr(probs, labels)
 
-    handle.remove()
+    # -- Hits@K --
+    for k in ks:
+        metrics[f"hits@{k}"] = compute_hits_at_k(probs, labels, k)
 
-    if not embeddings_list:
-        print("No embeddings collected — check model architecture.")
-        return
+    return metrics
 
-    X = np.vstack(embeddings_list)
-    y = np.array(labels_list)
 
-    print(f"Running t-SNE on {X.shape[0]} samples, {X.shape[1]} dims …")
-    tsne = TSNE(n_components=2, perplexity=perplexity, random_state=42)
-    X2   = tsne.fit_transform(X)
+# --------------------------------------------------------------------------
+#  Ranking metrics
+# --------------------------------------------------------------------------
 
-    unique_labels = sorted(set(y.tolist()))
-    cmap = plt.cm.get_cmap("tab20", len(unique_labels))
+def compute_mrr(scores: np.ndarray, labels: np.ndarray) -> float:
+    """
+    Compute Mean Reciprocal Rank (MRR).
 
-    fig, ax = plt.subplots(figsize=figsize)
-    for i, label_idx in enumerate(unique_labels):
-        mask = y == label_idx
-        ax.scatter(X2[mask, 0], X2[mask, 1], s=10, alpha=0.6,
-                   color=cmap(i), label=idx2label.get(label_idx, str(label_idx)))
-    ax.legend(markerscale=2, fontsize=7, loc="best", ncol=2)
-    ax.set_title("t-SNE of Penultimate Embeddings")
-    ax.set_xlabel("t-SNE 1")
-    ax.set_ylabel("t-SNE 2")
+    For each positive edge, rank it among all scored edges and compute
+    1 / rank.  MRR is the mean of these reciprocal ranks.
+
+    Parameters
+    ----------
+    scores : np.ndarray  (N,)
+        Predicted probabilities / scores.
+    labels : np.ndarray  (N,)
+        Binary labels (1 = positive, 0 = negative).
+
+    Returns
+    -------
+    float
+        MRR in [0, 1].
+    """
+    scores = np.asarray(scores)
+    labels = np.asarray(labels)
+    pos_mask = labels == 1
+
+    if pos_mask.sum() == 0:
+        return 0.0
+
+    # Rank all scores in descending order
+    sorted_indices = np.argsort(-scores)
+    ranks = np.empty_like(sorted_indices)
+    ranks[sorted_indices] = np.arange(1, len(scores) + 1)
+
+    pos_ranks = ranks[pos_mask]
+    reciprocal_ranks = 1.0 / pos_ranks.astype(float)
+
+    return float(reciprocal_ranks.mean())
+
+
+def compute_hits_at_k(
+    scores: np.ndarray,
+    labels: np.ndarray,
+    k: int = 10,
+) -> float:
+    """
+    Compute Hits@K -- fraction of positive edges ranked in the top-K.
+
+    Parameters
+    ----------
+    scores : np.ndarray  (N,)
+    labels : np.ndarray  (N,)
+    k : int
+
+    Returns
+    -------
+    float
+        Hits@K in [0, 1].
+    """
+    scores = np.asarray(scores)
+    labels = np.asarray(labels)
+    pos_mask = labels == 1
+    n_pos = pos_mask.sum()
+
+    if n_pos == 0:
+        return 0.0
+
+    # Top-K indices by descending score
+    top_k_indices = np.argsort(-scores)[:k]
+    hits = labels[top_k_indices].sum()
+
+    return float(hits / n_pos)
+
+
+# --------------------------------------------------------------------------
+#  Visualisation
+# --------------------------------------------------------------------------
+
+def plot_training_curves(
+    history: Dict[str, List[float]],
+    save_path: Optional[str] = None,
+) -> None:
+    """
+    Plot training loss and validation AUC over epochs.
+
+    Parameters
+    ----------
+    history : dict
+        Must contain ``train_loss`` and ``val_auc`` lists.
+    save_path : str, optional
+        If given, save the figure instead of showing it.
+    """
+    import matplotlib.pyplot as plt
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
+
+    epochs = range(1, len(history["train_loss"]) + 1)
+
+    # Loss
+    ax1.plot(epochs, history["train_loss"], "b-", label="Train loss")
+    ax1.set_xlabel("Epoch")
+    ax1.set_ylabel("BCE Loss")
+    ax1.set_title("Training Loss")
+    ax1.legend()
+    ax1.grid(True, alpha=0.3)
+
+    # AUC
+    if "val_auc" in history:
+        ax2.plot(epochs, history["val_auc"], "r-", label="Val AUC")
+        ax2.set_xlabel("Epoch")
+        ax2.set_ylabel("AUC-ROC")
+        ax2.set_title("Validation AUC")
+        ax2.legend()
+        ax2.grid(True, alpha=0.3)
+
     plt.tight_layout()
     if save_path:
-        plt.savefig(save_path, dpi=150)
-    plt.show()
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+        print(f"  Saved training curves -> {save_path}")
+    else:
+        plt.show()
+    plt.close(fig)
+
+
+def plot_embedding_tsne(
+    z_dict: Dict[str, torch.Tensor],
+    node_type: str = "MusicalPiece",
+    labels: Optional[np.ndarray] = None,
+    n_samples: int = 2000,
+    save_path: Optional[str] = None,
+) -> None:
+    """
+    Visualise node embeddings with t-SNE.
+
+    Parameters
+    ----------
+    z_dict : dict[str, Tensor]
+        Node embeddings per type (output of ``model.encode()``).
+    node_type : str
+        Which node type to visualise.
+    labels : np.ndarray, optional
+        Colour-coding labels (e.g. genre IDs).
+    n_samples : int
+        Max samples to plot (for speed).
+    save_path : str, optional
+        Save figure path.
+    """
+    from sklearn.manifold import TSNE
+    import matplotlib.pyplot as plt
+
+    z = z_dict[node_type].cpu().numpy()
+    if len(z) > n_samples:
+        idx = np.random.choice(len(z), n_samples, replace=False)
+        z = z[idx]
+        if labels is not None:
+            labels = np.asarray(labels)[idx]
+
+    tsne = TSNE(n_components=2, perplexity=30, random_state=42)
+    coords = tsne.fit_transform(z)
+
+    fig, ax = plt.subplots(figsize=(8, 8))
+    scatter = ax.scatter(
+        coords[:, 0], coords[:, 1],
+        c=labels, cmap="tab20", s=5, alpha=0.6,
+    )
+    if labels is not None:
+        plt.colorbar(scatter, ax=ax, fraction=0.03)
+    ax.set_title(f"t-SNE -- {node_type} embeddings")
+    ax.set_xticks([])
+    ax.set_yticks([])
+
+    plt.tight_layout()
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+        print(f"  Saved t-SNE plot -> {save_path}")
+    else:
+        plt.show()
+    plt.close(fig)
+
+
+def plot_score_distribution(
+    pos_scores: np.ndarray,
+    neg_scores: np.ndarray,
+    save_path: Optional[str] = None,
+) -> None:
+    """
+    Plot histograms of predicted scores for positive and negative edges.
+
+    Parameters
+    ----------
+    pos_scores, neg_scores : np.ndarray
+        Predicted probabilities for true and false edges.
+    save_path : str, optional
+        Save figure path.
+    """
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(8, 4))
+    ax.hist(neg_scores, bins=50, alpha=0.6, label="Negative", color="steelblue", density=True)
+    ax.hist(pos_scores, bins=50, alpha=0.6, label="Positive", color="coral", density=True)
+    ax.set_xlabel("Predicted score")
+    ax.set_ylabel("Density")
+    ax.set_title("Edge Score Distribution")
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+        print(f"  Saved score distribution -> {save_path}")
+    else:
+        plt.show()
+    plt.close(fig)

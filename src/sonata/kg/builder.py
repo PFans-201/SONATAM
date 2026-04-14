@@ -1,276 +1,332 @@
 """
 builder.py
 ==========
-Convert the curated pandas DataFrame into an RDF knowledge graph (rdflib)
-and/or a NetworkX directed graph for graph-ML pipelines.
+Build the SONATAM RDF knowledge graph and / or a NetworkX graph from the
+curated feature DataFrame.
+
+The **KGBuilder** uses :class:`sonata.kg.schema.HarmonicKGSchema` to mint
+URIs and then populates an ``rdflib.Graph`` with:
+
+* MusicalPiece nodes (with jSymbolic2 + semantic feature literals)
+* Artist, Genre, MusicalKey, Era entity nodes
+* Edges: hasArtist, hasGenre, hasGlobalKey, hasEra
+* (Optional) User interaction edges: listenedTo, rated
 
 Main class
 ----------
 KGBuilder
-    from_dataframe(df)         → rdflib.Graph  (RDF triples)
-    to_networkx(df)            → nx.DiGraph     (for GNN / graph analytics)
-    save(graph, path, fmt)     → writes Turtle / JSON-LD / N-Triples
-    load(path)                 → rdflib.Graph
+    from_dataframe(df, ...)          -> rdflib.Graph
+    to_networkx(df, ...)             -> nx.DiGraph
+    save(graph, path, fmt)           -> None
+    load(path, fmt)                  -> rdflib.Graph
 """
 
 from __future__ import annotations
 
-import ast
+import logging
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
+import numpy as np
 import pandas as pd
-from rdflib import Graph, Literal, URIRef
-from rdflib.namespace import RDF, RDFS, XSD
 
-from sonata.kg.schema import HarmonicKGSchema as S
+from sonata.config.settings import CFG
+from sonata.kg.schema import HarmonicKGSchema
 
 __all__ = ["KGBuilder"]
 
-# Supported rdflib serialisation formats
-_FORMAT_MAP = {
-    ".ttl":      "turtle",
-    ".nt":       "ntriples",
-    ".jsonld":   "json-ld",
-    ".json":     "json-ld",
-    ".n3":       "n3",
-    ".xml":      "xml",
-}
+log = logging.getLogger(__name__)
 
 
 class KGBuilder:
     """
-    Build an RDF knowledge graph from the unified curated dataset.
+    Construct an RDF knowledge graph from a SONATAM feature DataFrame.
 
-    The graph represents the following entity types and relationships::
-
-        Song  ─── hasArtist    ──► Artist
-              ─── hasGenre     ──► Genre
-              ─── hasGlobalKey ──► MusicalKey
-              ─── hasProgression──► ChordProgression
-                                        └── hasChord ──► Chord
-        Chord ─── transitionsTo ──► Chord  (with probability literal)
-
-    Usage
-    -----
-    >>> from sonata.kg.builder import KGBuilder
-    >>> builder = KGBuilder()
-    >>> g = builder.from_dataframe(df)
-    >>> builder.save(g, "data/processed/harmonic_kg.ttl")
+    Parameters
+    ----------
+    include_progressions : bool
+        If ``True``, chord-level and progression-level nodes are added
+        (creates a much larger graph).
     """
 
-    def __init__(self) -> None:
-        pass
+    def __init__(self, include_progressions: bool = False) -> None:
+        cfg_kg = CFG.get("knowledge_graph", {})
+        self.include_progressions = include_progressions or cfg_kg.get(
+            "include_progressions", False
+        )
 
-    # ─────────────────────────────────────────────────────────────────────
-    #  Main entry: DataFrame → RDF Graph
-    # ─────────────────────────────────────────────────────────────────────
+    # ------------------------------------------------------------------
+    #  DataFrame -> rdflib.Graph
+    # ------------------------------------------------------------------
 
     def from_dataframe(
         self,
         df: pd.DataFrame,
-        include_progressions: bool = True,
+        user_interactions_df: Optional[pd.DataFrame] = None,
         verbose: bool = True,
-    ) -> Graph:
+    ):
         """
-        Convert a curated dataset DataFrame into an rdflib RDF graph.
+        Convert the feature DataFrame into an RDF graph.
 
         Parameters
         ----------
         df : pd.DataFrame
             Output of ``LakhMSDLinker.build_dataset()``.
-        include_progressions : bool
-            If True (and chord-level columns are present in df), add
-            per-song ChordProgression nodes with individual Chord nodes.
-            Set to False for a lightweight metadata-only graph.
+        user_interactions_df : pd.DataFrame, optional
+            Columns: ``user_id``, ``track_id``, ``play_count``, ``rating``.
         verbose : bool
-            Print progress.
+            Print progress information.
 
         Returns
         -------
         rdflib.Graph
         """
-        g = S.new_graph()
+        from rdflib import Graph, URIRef, Literal, Namespace, RDF, RDFS, XSD
 
-        for i, row in df.iterrows():
-            track_id = str(row.get("track_id", f"unknown_{i}"))
-            song_uri = S.song_uri(track_id)
+        HKG = Namespace(HarmonicKGSchema.NAMESPACE)
+        g = Graph()
+        g.bind("hkg", HKG)
 
-            # ── Song node ─────────────────────────────────────────────
-            g.add((song_uri, RDF.type, S.Song))
+        schema = HarmonicKGSchema
+        stats = {
+            "pieces": 0,
+            "artists": set(),
+            "genres": set(),
+            "keys": set(),
+            "eras": set(),
+        }
 
-            self._add_literal(g, song_uri, S.hasTrackId, track_id, XSD.string)
+        for _, row in df.iterrows():
+            track_id = str(row.get("track_id", ""))
+            if not track_id:
+                continue
 
+            piece = URIRef(schema.song_uri(track_id))
+            g.add((piece, RDF.type, HKG.MusicalPiece))
+
+            # -- Scalar data properties --
             if pd.notna(row.get("title")):
-                self._add_literal(g, song_uri, S.hasTitle, str(row["title"]), XSD.string)
-            if pd.notna(row.get("artist_name")):
-                self._add_literal(g, song_uri, S.hasArtistName, str(row["artist_name"]), XSD.string)
+                g.add((piece, HKG.title, Literal(str(row["title"]))))
             if pd.notna(row.get("year")) and int(row["year"]) > 0:
-                self._add_literal(g, song_uri, S.hasYear, int(row["year"]), XSD.integer)
-            if pd.notna(row.get("msd_tempo")):
-                self._add_literal(g, song_uri, S.hasTempo, float(row["msd_tempo"]), XSD.float)
+                g.add((piece, HKG.year, Literal(int(row["year"]), datatype=XSD.integer)))
             if pd.notna(row.get("msd_duration")):
-                self._add_literal(g, song_uri, S.hasDuration, float(row["msd_duration"]), XSD.float)
-            if pd.notna(row.get("msd_loudness")):
-                self._add_literal(g, song_uri, S.hasLoudness, float(row["msd_loudness"]), XSD.float)
-            if pd.notna(row.get("msd_danceability")):
-                self._add_literal(g, song_uri, S.hasDanceability, float(row["msd_danceability"]), XSD.float)
-            if pd.notna(row.get("msd_energy")):
-                self._add_literal(g, song_uri, S.hasEnergy, float(row["msd_energy"]), XSD.float)
-            if pd.notna(row.get("msd_time_sig")):
-                self._add_literal(g, song_uri, S.hasTimeSignature, int(row["msd_time_sig"]), XSD.integer)
-            if pd.notna(row.get("match_score")):
-                self._add_literal(g, song_uri, S.hasMatchScore, float(row["match_score"]), XSD.float)
+                g.add((piece, HKG.duration, Literal(float(row["msd_duration"]), datatype=XSD.double)))
+            if pd.notna(row.get("msd_tempo")):
+                g.add((piece, HKG.tempo, Literal(float(row["msd_tempo"]), datatype=XSD.double)))
 
-            # ── Artist node ───────────────────────────────────────────
-            if pd.notna(row.get("artist_id")):
-                artist_uri = S.artist_uri(str(row["artist_id"]))
-                g.add((artist_uri, RDF.type, S.Artist))
-                g.add((song_uri, S.hasArtist, artist_uri))
-                if pd.notna(row.get("artist_name")):
-                    self._add_literal(g, artist_uri, RDFS.label, str(row["artist_name"]), XSD.string)
-
-            # ── Genre nodes ───────────────────────────────────────────
-            if pd.notna(row.get("top3_genres")):
-                for genre_label in str(row["top3_genres"]).split(";"):
-                    genre_label = genre_label.strip()
-                    if not genre_label:
-                        continue
-                    genre_uri = S.genre_uri(genre_label)
-                    g.add((genre_uri, RDF.type, S.Genre))
-                    self._add_literal(g, genre_uri, S.genreLabel, genre_label, XSD.string)
-                    g.add((song_uri, S.hasGenre, genre_uri))
-
-            # ── Key node ──────────────────────────────────────────────
-            global_key = row.get("global_key") or row.get("msd_key_name")
-            global_mode = row.get("global_mode") or row.get("msd_mode_name", "")
-            if pd.notna(global_key):
-                key_str = f"{global_key} {global_mode}".strip()
-                key_uri = S.key_uri(key_str)
-                g.add((key_uri, RDF.type, S.MusicalKey))
-                self._add_literal(g, key_uri, S.keyName, str(global_key), XSD.string)
-                self._add_literal(g, key_uri, S.keyMode, str(global_mode), XSD.string)
-                g.add((song_uri, S.hasGlobalKey, key_uri))
-
-            # ── Harmonic feature literals on Song ─────────────────────
-            harm_map = {
-                "num_modulations":       (S.numModulations,      XSD.integer),
-                "chord_vocab_roman":     (S.chordVocabRoman,     XSD.integer),
-                "unique_chord_ratio":    (S.uniqueChordRatio,    XSD.float),
-                "transition_entropy":    (S.transitionEntropy,   XSD.float),
-                "harm_rhythm_mean":      (S.harmRhythmMean,      XSD.float),
-                "avg_chord_cardinality": (S.avgChordCardinality, XSD.float),
-                "interval_class_vector": (S.intervalClassVector, XSD.string),
-                "func_ratio_T":          (S.funcRatioT,          XSD.float),
-                "func_ratio_D":          (S.funcRatioD,          XSD.float),
-                "func_ratio_S":          (S.funcRatioS,          XSD.float),
-                "func_ratio_PD":         (S.funcRatioPD,         XSD.float),
-            }
-            for col, (prop, dtype) in harm_map.items():
-                if col in row and pd.notna(row[col]):
+            # -- Feature literals (jsym_* and sem_*) --
+            for col in df.columns:
+                if (col.startswith("jsym_") or col.startswith("sem_")) and pd.notna(row.get(col)):
                     try:
-                        val = int(row[col]) if dtype == XSD.integer else (
-                            float(row[col]) if dtype == XSD.float else str(row[col])
-                        )
-                        self._add_literal(g, song_uri, prop, val, dtype)
+                        val = float(row[col])
+                        g.add((piece, HKG[col], Literal(val, datatype=XSD.double)))
                     except (ValueError, TypeError):
-                        pass
+                        g.add((piece, HKG[col], Literal(str(row[col]))))
+
+            # -- Artist --
+            artist_id = str(row.get("artist_id", ""))
+            if artist_id:
+                artist = URIRef(schema.artist_uri(artist_id))
+                g.add((artist, RDF.type, HKG.Artist))
+                if pd.notna(row.get("artist_name")):
+                    g.add((artist, HKG.artist_name, Literal(str(row["artist_name"]))))
+                g.add((piece, HKG.hasArtist, artist))
+                stats["artists"].add(artist_id)
+
+            # -- Genre(s) --
+            for col in ("top3_genres", "primary_genre"):
+                if col in row and pd.notna(row.get(col)):
+                    for gl in str(row[col]).split(";"):
+                        gl = gl.strip()
+                        if gl:
+                            genre = URIRef(schema.genre_uri(gl))
+                            g.add((genre, RDF.type, HKG.Genre))
+                            g.add((genre, HKG.genre_name, Literal(gl)))
+                            g.add((piece, HKG.hasGenre, genre))
+                            stats["genres"].add(gl)
+                    break  # only use first available genre column
+
+            # -- Musical key --
+            for col in ("sem_global_key", "msd_key_name"):
+                if col in row and pd.notna(row.get(col)):
+                    key_name = str(row[col])
+                    mode = str(row.get("sem_global_mode", row.get("msd_mode_name", "")))
+                    key = URIRef(schema.key_uri(key_name, mode))
+                    g.add((key, RDF.type, HKG.MusicalKey))
+                    g.add((key, HKG.key_name, Literal(key_name)))
+                    if mode:
+                        g.add((key, HKG.mode, Literal(mode)))
+                    g.add((piece, HKG.hasGlobalKey, key))
+                    stats["keys"].add(f"{key_name}_{mode}")
+                    break
+
+            # -- Era (from year) --
+            if pd.notna(row.get("year")) and int(row["year"]) > 0:
+                yr = int(row["year"])
+                decade = (yr // 10) * 10
+                era_label = f"{decade}s"
+                era = URIRef(schema.era_uri(era_label))
+                g.add((era, RDF.type, HKG.Era))
+                g.add((era, HKG.era_label, Literal(era_label)))
+                g.add((era, HKG.decade_start, Literal(decade, datatype=XSD.integer)))
+                g.add((piece, HKG.hasEra, era))
+                stats["eras"].add(era_label)
+
+            stats["pieces"] += 1
+
+        # -- User interactions --
+        n_interactions = 0
+        if user_interactions_df is not None and not user_interactions_df.empty:
+            for _, irow in user_interactions_df.iterrows():
+                uid = str(irow["user_id"])
+                tid = str(irow["track_id"])
+                user = URIRef(schema.user_uri(uid))
+                piece = URIRef(schema.song_uri(tid))
+                g.add((user, RDF.type, HKG.User))
+                g.add((user, HKG.user_id, Literal(uid)))
+
+                play_count = irow.get("play_count", 0)
+                if pd.notna(play_count) and int(play_count) > 0:
+                    g.add((user, HKG.listenedTo, piece))
+                    inter = URIRef(schema.interaction_uri(uid, tid))
+                    g.add((inter, RDF.type, HKG.Interaction))
+                    g.add((inter, HKG.play_count, Literal(int(play_count), datatype=XSD.integer)))
+
+                rating = irow.get("rating")
+                if pd.notna(rating):
+                    g.add((user, HKG.rated, piece))
+
+                n_interactions += 1
 
         if verbose:
-            n = len(g)
-            print(f"  ✓ RDF graph built: {n:,} triples  ({len(df)} songs)")
+            print(f"  RDF graph: {len(g)} triples")
+            print(f"      {stats['pieces']} pieces, "
+                  f"{len(stats['artists'])} artists, "
+                  f"{len(stats['genres'])} genres, "
+                  f"{len(stats['keys'])} keys, "
+                  f"{len(stats['eras'])} eras, "
+                  f"{n_interactions} user interactions")
 
         return g
 
-    # ─────────────────────────────────────────────────────────────────────
-    #  NetworkX export (for GNN / graph analytics)
-    # ─────────────────────────────────────────────────────────────────────
+    # ------------------------------------------------------------------
+    #  DataFrame -> NetworkX
+    # ------------------------------------------------------------------
 
-    def to_networkx(self, df: pd.DataFrame):
+    def to_networkx(
+        self,
+        df: pd.DataFrame,
+        user_interactions_df: Optional[pd.DataFrame] = None,
+        verbose: bool = True,
+    ):
         """
-        Build a lightweight NetworkX DiGraph where:
-          * Song, Artist, Genre, Key are nodes with attribute dicts
-          * Edges carry the relationship type as ``rel`` attribute
+        Build a NetworkX directed graph from the feature DataFrame.
 
-        Requires: ``pip install networkx``
+        Each node gets a ``type`` attribute; edges are typed via the
+        ``relation`` attribute.
+
+        Returns
+        -------
+        networkx.DiGraph
         """
-        try:
-            import networkx as nx
-        except ImportError as exc:
-            raise ImportError("networkx is required: pip install networkx") from exc
+        import networkx as nx
 
         G = nx.DiGraph()
 
         for _, row in df.iterrows():
-            track_id = str(row.get("track_id", "?"))
-            song_node = f"song:{track_id}"
+            track_id = str(row.get("track_id", ""))
+            if not track_id:
+                continue
 
-            G.add_node(song_node, type="Song",
-                       title=str(row.get("title", "")),
-                       artist=str(row.get("artist_name", "")),
-                       year=int(row["year"]) if pd.notna(row.get("year")) else 0,
-                       tempo=float(row["msd_tempo"]) if pd.notna(row.get("msd_tempo")) else 0.0,
-                       match_score=float(row["match_score"]) if pd.notna(row.get("match_score")) else 0.0,
-                       global_key=str(row.get("global_key", "")),
-                       primary_genre=str(row.get("primary_genre", "")))
+            # MusicalPiece node
+            G.add_node(
+                f"piece:{track_id}",
+                type="MusicalPiece",
+                title=str(row.get("title", "")),
+                year=int(row.get("year", 0)),
+            )
 
-            if pd.notna(row.get("artist_id")):
-                artist_node = f"artist:{row['artist_id']}"
-                G.add_node(artist_node, type="Artist", name=str(row.get("artist_name", "")))
-                G.add_edge(song_node, artist_node, rel="hasArtist")
+            # Artist
+            artist_id = str(row.get("artist_id", ""))
+            if artist_id:
+                G.add_node(
+                    f"artist:{artist_id}",
+                    type="Artist",
+                    name=str(row.get("artist_name", "")),
+                )
+                G.add_edge(f"piece:{track_id}", f"artist:{artist_id}", relation="hasArtist")
 
-            if pd.notna(row.get("top3_genres")):
-                for g_label in str(row["top3_genres"]).split(";"):
-                    g_label = g_label.strip()
-                    if g_label:
-                        genre_node = f"genre:{g_label}"
-                        G.add_node(genre_node, type="Genre", label=g_label)
-                        G.add_edge(song_node, genre_node, rel="hasGenre")
+            # Genre
+            for col in ("top3_genres", "primary_genre"):
+                if col in row and pd.notna(row.get(col)):
+                    for gl in str(row[col]).split(";"):
+                        gl = gl.strip()
+                        if gl:
+                            G.add_node(f"genre:{gl}", type="Genre", name=gl)
+                            G.add_edge(f"piece:{track_id}", f"genre:{gl}", relation="hasGenre")
+                    break
 
-            global_key = row.get("global_key") or row.get("msd_key_name")
-            if pd.notna(global_key):
-                key_node = f"key:{global_key}"
-                G.add_node(key_node, type="MusicalKey", name=str(global_key))
-                G.add_edge(song_node, key_node, rel="hasGlobalKey")
+            # Key
+            for col in ("sem_global_key", "msd_key_name"):
+                if col in row and pd.notna(row.get(col)):
+                    key = str(row[col])
+                    G.add_node(f"key:{key}", type="MusicalKey", name=key)
+                    G.add_edge(f"piece:{track_id}", f"key:{key}", relation="hasGlobalKey")
+                    break
+
+            # Era
+            if pd.notna(row.get("year")) and int(row["year"]) > 0:
+                era = f"{(int(row['year']) // 10) * 10}s"
+                G.add_node(f"era:{era}", type="Era", label=era)
+                G.add_edge(f"piece:{track_id}", f"era:{era}", relation="hasEra")
+
+        # User interactions
+        if user_interactions_df is not None and not user_interactions_df.empty:
+            for _, irow in user_interactions_df.iterrows():
+                uid = str(irow["user_id"])
+                tid = str(irow["track_id"])
+                G.add_node(f"user:{uid}", type="User")
+                G.add_edge(f"user:{uid}", f"piece:{tid}", relation="listenedTo")
+
+        if verbose:
+            print(f"  NetworkX graph: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges")
 
         return G
 
-    # ─────────────────────────────────────────────────────────────────────
-    #  Persistence helpers
-    # ─────────────────────────────────────────────────────────────────────
+    # ------------------------------------------------------------------
+    #  Serialisation
+    # ------------------------------------------------------------------
 
     @staticmethod
-    def save(graph: Graph, path: str, fmt: Optional[str] = None) -> None:
+    def save(graph, path: str, fmt: str = "turtle") -> None:
         """
-        Serialise the graph to disk.
+        Serialise an rdflib.Graph to disk.
 
         Parameters
         ----------
         graph : rdflib.Graph
         path : str
-            Output file path. Extension determines format if ``fmt`` is None:
-            ``.ttl`` → Turtle, ``.nt`` → N-Triples, ``.jsonld`` → JSON-LD.
-        fmt : str, optional
-            Override rdflib serialisation format string.
+            Destination file path.
+        fmt : str
+            Serialisation format: ``"turtle"``, ``"nt"``, ``"xml"``, ``"json-ld"``.
         """
         p = Path(path)
         p.parent.mkdir(parents=True, exist_ok=True)
-        rdflib_fmt = fmt or _FORMAT_MAP.get(p.suffix.lower(), "turtle")
-        graph.serialize(destination=str(p), format=rdflib_fmt)
-        print(f"  ✓ Saved {len(graph):,} triples → {p}  [{rdflib_fmt}]")
+        graph.serialize(destination=str(p), format=fmt)
+        log.info("Saved RDF graph -> %s (%s)", p, fmt)
 
     @staticmethod
-    def load(path: str) -> Graph:
-        """Load an RDF graph from a serialised file."""
-        g = S.new_graph()
-        g.parse(path)
-        print(f"  ✓ Loaded {len(g):,} triples ← {path}")
+    def load(path: str, fmt: str = "turtle"):
+        """
+        Load an rdflib.Graph from disk.
+
+        Returns
+        -------
+        rdflib.Graph
+        """
+        from rdflib import Graph
+
+        g = Graph()
+        g.parse(path, format=fmt)
+        log.info("Loaded RDF graph <- %s (%d triples)", path, len(g))
         return g
-
-    # ─────────────────────────────────────────────────────────────────────
-    #  Internal helpers
-    # ─────────────────────────────────────────────────────────────────────
-
-    @staticmethod
-    def _add_literal(g: Graph, subject: URIRef, predicate: URIRef, value, dtype) -> None:
-        g.add((subject, predicate, Literal(value, datatype=dtype)))

@@ -20,7 +20,7 @@ venv*/
 ENV/
 
 # ── Data  (never commit raw data or large artefacts) ─────────────────────────
-data/
+/data/
 *.parquet
 *.csv
 *.h5

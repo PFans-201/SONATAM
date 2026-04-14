@@ -48,43 +48,60 @@ knowledge_graph:
   graphml_file:      "data/processed/harmonic_kg.graphml"
   include_progressions: false    # true = adds chord-level nodes (large graph)
 
-# ── Deep learning ────────────────────────────────────────────────────────────
-deep_learning:
-  label_col:         "primary_genre"
-  model:             "mlp"               # "mlp" | "transformer"
-  checkpoint_dir:    "checkpoints"
+# ── Deep learning — Graph Neural Network ─────────────────────────────────
+graph_learning:
+  task:              "link_prediction"    # "link_prediction" | "node_classification"
 
-  # MLP (GenreClassifier)
-  mlp:
-    hidden_dims:     [256, 128, 64]
-    dropout:         0.3
+  # GraphSAGE architecture
+  graphsage:
+    hidden_channels:   128
+    num_layers:        2
+    aggregator:        "mean"             # "mean" | "max" | "lstm"
+    dropout:           0.3
+    num_neighbors:     [15, 10]           # per-layer sampling fan-out
 
-  # Transformer (ChordTransformer)
-  transformer:
-    d_model:         128
-    nhead:           4
-    num_layers:      3
-    dim_feedforward: 256
-    max_seq_len:     128
-    dropout:         0.1
+  # Link prediction decoder
+  link_predictor:
+    hidden_channels:   64
+    num_layers:        2                  # MLP on concatenated embeddings
 
   # Training
   training:
-    epochs:          30
-    lr:              3.0e-4
-    weight_decay:    1.0e-4
-    batch_size:      64
-    val_frac:        0.15
-    test_frac:       0.15
-    clip_grad_norm:  1.0
-    save_every:      5
-    device:          "auto"              # "auto" | "cuda" | "cpu"
-    seed:            42
+    epochs:            100
+    lr:                1.0e-3
+    weight_decay:      1.0e-4
+    batch_size:        512
+    val_frac:          0.15
+    test_frac:         0.15
+    negative_sampling_ratio: 1.0         # neg / pos edges
+    clip_grad_norm:    1.0
+    patience:          15                 # early stopping patience
+    save_every:        10
+    device:            "auto"
+    seed:              42
 
-# ── Generation ───────────────────────────────────────────────────────────────
-generation:
-  output_dir:        "data/generated"
-  default_tempo:     120
-  default_key:       "C major"
-  duration_per_chord: 1.0
-  time_signature:    "4/4"
+  checkpoint_dir:      "checkpoints"
+
+# ── Feature extraction ───────────────────────────────────────────────────
+features:
+  # jSymbolic2 (statistical branch)
+  jsymbolic:
+    jar_path:          "lib/jSymbolic2.jar"    # path to JAR file
+    config_path:       null                     # null = use defaults (all features)
+    timeout_sec:       120                      # per-file timeout
+
+  # musif (semantic branch)
+  musif:
+    extract_roman:     true
+    extract_key:       true
+    extract_harmony:   true
+
+# ── Inference pipeline ───────────────────────────────────────────────────
+inference:
+  # MT3 audio transcription
+  mt3:
+    model_name:        "mt3"                   # Google MT3 checkpoint
+    sample_rate:       16000
+    output_format:     "midi"
+
+  output_dir:          "data/inferred"

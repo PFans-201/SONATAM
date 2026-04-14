@@ -2,20 +2,27 @@
 **Symbolic Ontology & Neural Audio Transcription Architecture for Music**
 
 ### 📖 About
-S.O.N.A.T.A.M. is a neuro-symbolic AI framework for music. It provides a full end-to-end pipeline from MIDI and audio metadata to a structured Music Knowledge Graph and downstream Deep Learning models. 
+S.O.N.A.T.A.M. is a neuro-symbolic AI framework for music that combines a **structured Music Knowledge Graph** with **Graph Neural Networks** (GraphSAGE) for hybrid recommendation and link prediction.
 
 ---
 
 ### 🧠 Project Overview
-Automatic Music Transcription (AMT) models often struggle with polyphonic audio, hallucinating notes that make acoustic sense but violate fundamental music theory. S.O.N.A.T.A.M. solves this by bridging the gap between acoustic perception and the "Platonic rules" of music.
 
-By mining massive symbolic datasets (like the Lakh MIDI Dataset), S.O.N.A.T.A.M. automatically extracts the statistical and theoretical rules of voice-leading, harmony, and key modulation. It then formalizes these rules into a highly structured Knowledge Graph. When paired with downstream Deep Learning models (like MT3), this graph acts as a mathematical prior—forcing the acoustic neural network to weigh what it *hears* against what is theoretically *probable* within a specific musical genre.
+S.O.N.A.T.A.M. builds a heterogeneous knowledge graph from large-scale symbolic music datasets and trains an **inductive GraphSAGE** model to:
 
-### ⚙️ Core Pipeline Features
-* **Automated Rule Mining:** Parses raw, multi-track MIDI files using dynamic harmonic pooling and rolling windows to extract clean, root-position chord progressions.
-* **Bilingual Ontology:** Maps absolute acoustic events (Harte notation) to their relative functional theory (Roman Numerals) based on dynamically detected local key contexts.
-* **The Music Knowledge Graph:** Generates a dense, probabilistic RDF/Turtle graph mapping genres, structural sequences, and harmonic rules.
-* **Neuro-Symbolic Integration:** Formats structural metadata (Keys, Chords) into discrete tokens or continuous embeddings to inject music theory priors directly into Transformer encoder-decoder architectures.
+* **Predict missing links** — infer genre, artist, key, and era for new pieces
+* **Recommend similar music** — via learned node embeddings (content-based + collaborative)
+* **Process unseen audio** — transcribe raw MP3/WAV via MT3, extract features, and predict without retraining
+
+The key insight is that GraphSAGE learns an *aggregation function* over the graph neighbourhood, not fixed node embeddings. This makes it **inductive**: a brand-new audio file can be transcribed to MIDI, featurised, added to the graph, and scored instantly.
+
+### ⚙️ Core Pipeline
+
+* **Dual-Branch Feature Extraction:** jSymbolic2 (≈200 statistical features) + musif/music21 (semantic: Roman numerals, key profiles, functional harmony)
+* **Heterogeneous Knowledge Graph:** RDF (rdflib) with entity nodes (Piece, Artist, Genre, Key, Era) and feature literals
+* **PyTorch Geometric HeteroData:** Direct conversion from DataFrame for GNN training
+* **GraphSAGE Link Prediction:** 2-layer heterogeneous message passing + MLP decoder
+* **Audio Inference Pipeline:** MT3 transcription → dual-branch features → inductive GNN scoring
 
 ---
 
@@ -23,35 +30,38 @@ By mining massive symbolic datasets (like the Lakh MIDI Dataset), S.O.N.A.T.A.M.
 
 ```text
 Lakh MIDI Dataset (lmd_matched/)
-        │  match_scores.json (DTW quality filter)
-        ▼
-┌─────────────────────────────────┐
-│  01. Dataset Curation           │  → curated_dataset.parquet
-│  MIDIHarmonicAnalyzer           │
-│  LakhMSDLinker + MSD HDF5       │
-└─────────────────────────────────┘
-        │
-        ▼
-┌─────────────────────────────────┐
-│  02. Knowledge Graph            │  → harmonic_kg.ttl / .graphml
-│  RDF (rdflib) + NetworkX        │
-│  SPARQL query helpers           │
-└─────────────────────────────────┘
-        │
-        ▼
-┌─────────────────────────────────┐
-│  03. Deep Learning              │  → checkpoints/best.pt
-│  GenreClassifier (MLP)          │
-│  ChordTransformer               │
-│  Trainer + Evaluator            │
-└─────────────────────────────────┘
-        │
-        ▼
-┌─────────────────────────────────┐
-│  04. Generation                 │  → output/*.mid / *.musicxml
-│  Chord progression → MIDI       │
-│  Chord progression → MusicXML   │
-└─────────────────────────────────┘
+    │  match_scores.json (DTW quality filter)
+    ▼
+┌────────────────────────────────────┐
+│  01. Feature Extraction            │  → curated_dataset.parquet
+│  LakhMSDLinker                     │
+│  ├─ jSymbolic2  (statistical)      │
+│  └─ SemanticAnalyzer (semantic)    │
+└────────────────────────────────────┘
+    │
+    ▼
+┌────────────────────────────────────┐
+│  02. Knowledge Graph               │  → harmonic_kg.ttl + hetero_data.pt
+│  RDF (rdflib) + NetworkX           │
+│  HeteroGraphConverter → PyG        │
+└────────────────────────────────────┘
+    │
+    ▼
+┌────────────────────────────────────┐
+│  03. Graph Learning                │  → checkpoints/best_model.pt
+│  HeteroGraphSAGE (2-layer)         │
+│  LinkPredictor (MLP)               │
+│  LinkPredTrainer                   │
+│  Eval: AUC, AP, MRR, Hits@K       │
+└────────────────────────────────────┘
+    │
+    ▼
+┌────────────────────────────────────┐
+│  04. Audio Inference               │  → predicted links + recommendations
+│  MT3 audio → MIDI                  │
+│  Dual-branch feature extraction    │
+│  Inductive GNN scoring             │
+└────────────────────────────────────┘
 ```
 
 ---
@@ -60,173 +70,194 @@ Lakh MIDI Dataset (lmd_matched/)
 
 ```text
 SONATAM/
+├── pyproject.toml               ← installable package config
 ├── README.md
-├── requirements.txt
 │
 ├── config/
-│   ├── config.yaml          ← all paths, thresholds, hyperparameters
-│   └── config.py            ← CFG = load("config.yaml")
+│   ├── config.yaml              ← all paths, thresholds, hyperparameters
+│   └── settings.py              ← CFG = load("config.yaml")
 │
-├── 01_dataset/
-│   ├── harmonic_analyzer.py ← MIDIHarmonicAnalyzer class
-│   ├── msd_reader.py        ← read_msd_metadata() for MSD HDF5
-│   ├── linker.py            ← LakhMSDLinker (MIDI ↔ HDF5 + match scores)
-│   ├── notebooks/
-│   │   └── 01_dataset_exploration.ipynb
-│   └── output/              ← curated_dataset.parquet / .csv
+├── src/sonata/
+│   ├── __init__.py
+│   ├── notebook_utils.py        ← rp(), show_paths() for notebooks
+│   │
+│   ├── data/                    ← Feature extraction
+│   │   ├── analyzer.py          ← MIDIHarmonicAnalyzer (legacy)
+│   │   ├── linker.py            ← LakhMSDLinker (dual-branch pipeline)
+│   │   ├── msd_reader.py        ← read_msd_metadata() for MSD HDF5
+│   │   ├── jsymbolic_wrapper.py ← jSymbolic2 JAR wrapper (statistical)
+│   │   └── semantic_analyzer.py ← musif / music21 (semantic features)
+│   │
+│   ├── kg/                      ← Knowledge graph
+│   │   ├── schema.py            ← RDF ontology: classes, properties, URI factories
+│   │   ├── builder.py           ← DataFrame → RDF (rdflib) + NetworkX
+│   │   ├── queries.py           ← SPARQL wrappers
+│   │   └── converter.py         ← DataFrame → PyTorch Geometric HeteroData
+│   │
+│   ├── models/                  ← Graph neural networks
+│   │   ├── graph_models.py      ← HeteroGraphSAGE + LinkPredictor
+│   │   ├── train.py             ← LinkPredTrainer + TrainerConfig
+│   │   └── evaluate.py          ← AUC, AP, MRR, Hits@K, t-SNE plots
+│   │
+│   └── inference/               ← Audio inference pipeline
+│       ├── audio_transcriber.py ← MT3 / basic-pitch wrapper
+│       ├── feature_extractor.py ← Audio/MIDI → dual-branch features
+│       └── graph_querier.py     ← Trained GNN → link predictions
 │
-├── 02_knowledge_graph/
-│   ├── schema.py            ← RDF namespace + URI factory
-│   ├── builder.py           ← DataFrame → rdflib Graph / NetworkX
-│   ├── queries.py           ← SPARQL wrappers + graph traversal
-│   ├── notebooks/
-│   │   └── 02_kg_construction.ipynb
-│   └── output/              ← harmonic_kg.ttl / .nt / .graphml
+├── notebooks/
+│   ├── 01-feature-extraction.ipynb
+│   ├── 02-kg-construction.ipynb
+│   ├── 03-graph-learning.ipynb
+│   └── 04-audio-inference.ipynb
 │
-├── 03_deep_learning/
-│   ├── dataset.py           ← HarmonicDataset (PyTorch Dataset)
-│   ├── train.py             ← Trainer + TrainerConfig
-│   ├── evaluate.py          ← classification_report, confusion matrix, t-SNE
-│   ├── models/
-│   │   ├── genre_classifier.py  ← MLP (feature vector → genre)
-│   │   └── sequence_model.py    ← ChordTransformer (token seq → genre / next chord)
-│   ├── notebooks/
-│   │   └── 03_model_training.ipynb
-│   └── checkpoints/
+├── scripts/
+│   ├── download_lmd.py          ← Download Lakh MIDI Dataset assets
+│   ├── build_dataset.py         ← CLI: dual-branch feature extraction
+│   ├── build_kg.py              ← CLI: RDF + HeteroData construction
+│   └── train_model.py           ← CLI: GraphSAGE training
 │
-└── 04_generation/
-    ├── midi_writer.py       ← write_chord_midi()
-    ├── musicxml_writer.py   ← write_musicxml()
-    ├── notebooks/
-    │   └── 04_generation.ipynb
-    └── output/              ← generated .mid / .musicxml files
+├── tests/
+│   ├── test_data/
+│   ├── test_kg/
+│   └── test_models/
+│
+├── data/
+│   ├── raw/                     ← lmd_matched, h5, match_scores
+│   └── processed/               ← parquet, ttl, hetero_data.pt
+│
+└── checkpoints/                 ← saved model weights
 ```
 
 ---
 
-## 💾 Data Sources & Thresholds
+## 💾 Data Sources
 
-| Dataset | Location | Description |
-|---|---|---|
-| Lakh MIDI Dataset (LMD-matched) | `tegridy-tools/tegridy-tools/lmd_matched/` | 116k MIDI files matched to MSD |
-| MSD HDF5 (single-song files) | `tegridy-tools/tegridy-tools/lmd_matched_h5/` | 31k HDF5 files with audio features |
-| match_scores.json | `match_scores.json` | DTW similarity scores (quality filter) |
+| Dataset | Description |
+|---|---|
+| Lakh MIDI Dataset (LMD-matched) | 116k MIDI files matched to MSD |
+| MSD HDF5 (single-song files) | Metadata + audio features |
+| match_scores.json | DTW similarity for quality filtering |
 
-**Match Score Thresholds**
-
-| Threshold | MIDI files kept | Tracks kept | Recommended for |
-|---|---|---|---|
-| ≥ 0.80 | 1.4% | 5.7% | Music theory / KG (high purity) |
-| **≥ 0.70** | **50.5%** | **60.4%** | **Genre classification (default)** |
-| ≥ 0.65 | 73.1% | 80.3% | Exploratory analysis |
+**Default match-score threshold:** `≥ 0.70` (keeps ~50% of MIDI files)
 
 ---
 
 ## 🚀 Quick Start
 
-### 1. Install dependencies
+### 1. Install
 
 ```bash
-pip install -r SONATA/requirements.txt
+python -m venv .venv
+source .venv/bin/activate
+pip install -e .
 ```
 
 ### 2. Configure paths
 
-Edit `SONATA/config/config.yaml` to point to your local data:
+Edit `config/config.yaml`:
 
 ```yaml
 data:
-  midi_root: "tegridy-tools/tegridy-tools/lmd_matched"
-  h5_root:   "tegridy-tools/tegridy-tools/lmd_matched_h5"
-  match_scores_path: "match_scores.json"
+  midi_root: "data/raw/lmd_matched"
+  h5_root:   "data/raw/lmd_matched_h5"
 ```
 
-### 3. Build the curated dataset
+### 3. Download data
+
+```bash
+python scripts/download_lmd.py
+```
+
+### 4. Build the dataset
+
+```bash
+python scripts/build_dataset.py --max-tracks 500
+```
+
+### 5. Build the KG + HeteroData
+
+```bash
+python scripts/build_kg.py
+```
+
+### 6. Train GraphSAGE
+
+```bash
+python scripts/train_model.py --data data/processed/hetero_data.pt --epochs 100
+```
+
+### 7. Inference on a new audio file
 
 ```python
-import json
-from harmonic_kg_project.dataset import MIDIHarmonicAnalyzer, LakhMSDLinker
-from harmonic_kg_project.config.config import CFG
+from sonata.inference import FeatureExtractor, GraphQuerier
 
-with open(CFG["data"]["match_scores_path"]) as f:
-    match_scores = json.load(f)
+extractor = FeatureExtractor()
+features = extractor.extract("my_song.mp3")
 
-analyzer = MIDIHarmonicAnalyzer(
-    key_window    = CFG["analyzer"]["key_window"],
-    key_confidence= CFG["analyzer"]["key_confidence"],
-)
-linker = LakhMSDLinker(
-    midi_root    = CFG["data"]["midi_root"],
-    h5_root      = CFG["data"]["h5_root"],
-    analyzer     = analyzer,
-    match_scores = match_scores,
-)
-
-df = linker.build_dataset(
-    min_score   = CFG["dataset"]["min_match_score"],
-    pick_midi   = CFG["dataset"]["pick_midi"],
-    max_tracks  = 500,   # set None for full dataset
-)
-df.to_parquet(CFG["dataset"]["parquet_file"], index=False)
+querier = GraphQuerier(model_path="checkpoints/best_model.pt",
+                       hetero_data=hetero_data)
+predictions = querier.predict_links(features, top_k=5)
+similar = querier.recommend_similar(features, top_k=10)
 ```
 
-### 4. Build the Knowledge Graph
+---
 
-```python
-from harmonic_kg_project.knowledge_graph import KGBuilder, KGQueries
+## 🏗️ Architecture Details
 
-builder = KGBuilder()
-g       = builder.from_dataframe(df)
-builder.save(g, CFG["knowledge_graph"]["turtle_file"])
+### GraphSAGE (Inductive Heterogeneous GNN)
 
-q   = KGQueries(g)
-print(q.summary())
-print(q.genre_distribution().head(20))
-```
+| Hyperparameter | Default |
+|---|---|
+| Hidden channels | 128 |
+| GraphSAGE layers | 2 |
+| Aggregator | mean |
+| Link predictor MLP layers | 2 |
+| Dropout | 0.3 |
+| Learning rate | 1e-3 |
+| Epochs | 100 |
+| Early stopping patience | 15 |
+| Negative sampling ratio | 1.0 |
 
-### 5. Train a genre classifier
+### Node Types
 
-```python
-from harmonic_kg_project.deep_learning import HarmonicDataset
-from harmonic_kg_project.deep_learning.models import GenreClassifier
-from harmonic_kg_project.deep_learning.train import Trainer, TrainerConfig
+| Type | Source |
+|---|---|
+| MusicalPiece | MSD tracks + dual-branch features |
+| Artist | MSD metadata |
+| Genre | MSD primary_genre |
+| MusicalKey | Detected global key |
+| Era | Decade from release year |
 
-dataset  = HarmonicDataset(df, label_col="primary_genre", mode="classification")
-idx_train, idx_val, _ = dataset.split()
+### Edge Types
 
-from torch.utils.data import Subset
-train_loader = Subset(dataset, idx_train)
-val_loader   = Subset(dataset, idx_val)
-
-model   = GenreClassifier(input_dim=dataset.input_dim, num_classes=dataset.num_classes)
-trainer = Trainer(model, train_loader, val_loader, TrainerConfig(epochs=30))
-history = trainer.fit()
-```
-
-### 6. Export a chord progression to MIDI / MusicXML
-
-```python
-from harmonic_kg_project.generation import write_chord_midi, write_musicxml
-
-chords = ["C:maj", "A:min", "F:maj", "G:7", "C:maj"]
-write_chord_midi(chords,  "output/my_progression.mid",     tempo=120)
-write_musicxml  (chords,  "output/my_progression.musicxml", tempo=120)
-```
+| Edge | Meaning |
+|---|---|
+| hasArtist | Piece → Artist |
+| hasGenre | Piece → Genre |
+| hasGlobalKey | Piece → Key |
+| hasEra | Piece → Era |
 
 ---
 
 ## 🛠️ Dependencies
 
-See `requirements.txt` for pinned versions.
+See `pyproject.toml` for full list.
 
 | Package | Purpose |
 |---|---|
-| `music21` | MIDI parsing, harmonic analysis, score export |
-| `h5py` | MSD HDF5 reader |
-| `pandas`, `numpy` | Data manipulation |
+| `torch`, `torch-geometric` | GNN training (GraphSAGE) |
 | `rdflib` | RDF knowledge graph |
-| `networkx` | Graph analytics |
-| `torch` | Deep learning |
-| `scikit-learn` | Data splits, evaluation metrics |
+| `networkx` | Graph analytics & visualisation |
+| `music21` | MIDI parsing, harmonic analysis |
+| `pandas`, `numpy` | Data manipulation |
+| `scikit-learn` | Evaluation metrics |
+| `torchmetrics` | AUC-ROC, Average Precision |
 | `matplotlib`, `seaborn` | Visualisation |
-| `pyyaml` | Config loading |
+| `h5py` | MSD HDF5 reader |
+| `librosa` | Audio processing |
+
+---
+
+## 📄 License
+
+This project is part of a Master's thesis. All rights reserved.
