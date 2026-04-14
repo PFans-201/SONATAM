@@ -29,7 +29,7 @@ from typing import Any, Dict, List, Optional, Sequence
 
 import pandas as pd
 
-from sonata.config.settings import CFG
+from sonata.config.settings import CFG, resolve_path
 from sonata.data.msd_reader import read_msd_metadata
 
 __all__ = ["LakhMSDLinker"]
@@ -143,16 +143,16 @@ class LakhMSDLinker:
         cfg_data = CFG.get("data", {})
         cfg_ds = CFG.get("dataset", {})
 
-        self.midi_root = Path(midi_root or cfg_data.get("midi_root", "data/raw/lmd_matched"))
-        self.h5_root = Path(h5_root or cfg_data.get("h5_root", "data/raw/lmd_matched_h5"))
+        self.midi_root = resolve_path(midi_root or cfg_data.get("midi_root", "data/raw/lmd_matched"))
+        self.h5_root = resolve_path(h5_root or cfg_data.get("h5_root", "data/raw/lmd_matched_h5"))
         self.min_match_score = min_match_score or cfg_ds.get("min_match_score", 0.70)
         self.pick_midi = pick_midi or cfg_ds.get("pick_midi", "best")
         self.max_tracks = max_tracks or cfg_ds.get("max_tracks")
 
         # Optional match scores
         self.match_scores: Optional[Dict] = None
-        ms_path = match_scores_path or cfg_data.get("match_scores_path")
-        if ms_path and Path(ms_path).exists():
+        ms_path = resolve_path(match_scores_path or cfg_data.get("match_scores_path", "data/raw/match_scores.json"))
+        if ms_path.exists():
             log.info("Loading match scores from %s ...", ms_path)
             with open(ms_path, "r") as fh:
                 self.match_scores = json.load(fh)

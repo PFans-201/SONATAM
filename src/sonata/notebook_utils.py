@@ -8,8 +8,9 @@ the core library so that the library itself has no Jupyter dependency.
 
 Usage
 -----
->>> from sonata.notebook_utils import rp, show_path, show_paths
+>>> from sonata.notebook_utils import rp, pp, show_path, show_paths
 >>> print(f"Saved to {rp(some_path)}")
+>>> midi_root = pp(CFG["data"]["midi_root"])   # absolute path from config string
 """
 
 from __future__ import annotations
@@ -17,7 +18,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Iterable, Union
 
-__all__ = ["project_root", "rp", "show_path", "show_paths"]
+# Re-export for convenience — notebooks can do a single import line
+from sonata.config.settings import resolve_path  # noqa: F401
+
+__all__ = ["project_root", "rp", "pp", "resolve_path", "show_path", "show_paths"]
 
 # ── Project root resolution ───────────────────────────────────────────────────
 # __file__ = src/sonata/notebook_utils.py
@@ -25,6 +29,31 @@ __all__ = ["project_root", "rp", "show_path", "show_paths"]
 #  parents[1] = src/
 #  parents[2] = <project root>
 project_root: Path = Path(__file__).parents[2].resolve()
+
+
+def pp(cfg_value: Union[str, Path]) -> Path:
+    """
+    Convert a config-relative path string to an **absolute Path**.
+
+    Shorthand for :func:`sonata.config.settings.resolve_path` — designed
+    for concise use in notebook cells.
+
+    Parameters
+    ----------
+    cfg_value : str or Path
+        A raw path value from ``CFG``, e.g. ``CFG["data"]["midi_root"]``.
+
+    Returns
+    -------
+    Path
+        Absolute path under the project root.
+
+    Examples
+    --------
+    >>> pp("data/raw/lmd_matched")
+    PosixPath('/home/.../SONATAM/data/raw/lmd_matched')
+    """
+    return resolve_path(cfg_value)
 
 
 def rp(path: Union[str, Path]) -> str:

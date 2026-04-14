@@ -32,7 +32,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from sonata.config.settings import CFG
+from sonata.config.settings import CFG, resolve_path
 from sonata.models.graph_models import GraphSAGELinkPredModel
 
 __all__ = ["LinkPredTrainer", "TrainerConfig"]
@@ -210,7 +210,7 @@ class LinkPredTrainer:
         # -- Training loop --
         best_val_auc = 0.0
         patience_counter = 0
-        ckpt_dir = Path(self.cfg.checkpoint_dir)
+        ckpt_dir = resolve_path(self.cfg.checkpoint_dir)
         ckpt_dir.mkdir(parents=True, exist_ok=True)
 
         for epoch in range(1, self.cfg.epochs + 1):

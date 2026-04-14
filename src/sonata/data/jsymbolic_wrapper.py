@@ -26,7 +26,7 @@ from typing import Any, Dict, List, Optional, Sequence
 import numpy as np
 import pandas as pd
 
-from sonata.config.settings import CFG
+from sonata.config.settings import CFG, resolve_path
 
 __all__ = ["JSymbolicExtractor"]
 
@@ -68,15 +68,15 @@ class JSymbolicExtractor:
     ) -> None:
         cfg_js = CFG.get("features", {}).get("jsymbolic", {})
 
-        self.jar_path = Path(jar_path or cfg_js.get("jar_path", "lib/jSymbolic2.jar"))
+        self.jar_path = resolve_path(jar_path or cfg_js.get("jar_path", "lib/jSymbolic2.jar"))
         if not self.jar_path.exists():
             raise FileNotFoundError(
                 f"jSymbolic2 JAR not found: {self.jar_path}\n"
                 "Download from https://sourceforge.net/projects/jmir/files/jSymbolic/"
             )
 
-        self.config_path = Path(config_path) if config_path else (
-            Path(cfg_js["config_path"]) if cfg_js.get("config_path") else None
+        self.config_path = resolve_path(config_path) if config_path else (
+            resolve_path(cfg_js["config_path"]) if cfg_js.get("config_path") else None
         )
         self.timeout = timeout or cfg_js.get("timeout_sec", _DEFAULT_TIMEOUT)
 
